@@ -1,0 +1,42 @@
+name: Monitor do NewsBase
+
+on:
+  schedule:
+    - cron: "*/10 * * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  verificar:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Conferir o site e o vigia
+        run: |
+          falhou=0
+          for caminho in /boas-vindas /entrar /premium; do
+            codigo=$(curl -s -o /dev/null -w '%{http_code}' --max-time 20 --retry 2 --retry-delay 5 "https://newsbase.site$caminho" || true)
+            echo "$caminho -> $codigo"
+            if [ "$codigo" != "200" ]; then echo "::error::A página $caminho respondeu $codigo (deveria ser 200)."; falhou=1; fi
+          done
+          saude=$(curl -s --max-time 20 --retry 2 --retry-delay 5 https://newsbase.site/api/saude || true)
+          echo "saude -> $saude"
+          if ! echo "$saude" | grep -q '"ok":true'; then echo "::error::A coleta de notícias está parada ou o app não respondeu."; falhou=1; fi
+          if ! echo "$saude" | grep -q '"vigiaEmDia":true'; then echo "::error::O vigia interno parou de rodar."; falhou=1; fi
+          exit $falhou
+
+      - name: Carimbo semanal (evita o GitHub desligar o agendamento por falta de atividade)
+        if: success()
+        run: |
+          if [ "$(date -u +%u)" = "1" ] && [ "$(date -u +%H)" = "12" ]; then
+            date -u +"%Y-%m-%dT%H:%M:%SZ" > ultima-verificacao.txt
+            git config user.name "monitor-newsbase"
+            git config user.email "monitor-newsbase@users.noreply.github.com"
+            git add ultima-verificacao.txt
+            git commit -m "chore: carimbo semanal do monitor" || exit 0
+            git push
+          fi
